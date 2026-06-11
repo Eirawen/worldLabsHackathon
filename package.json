@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.43.0",
+    "@huggingface/transformers": "^3.8.1",
     "@sparkjsdev/spark": "^0.1.10",
     "three": "^0.178.0"
   },

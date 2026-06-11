@@ -1,6 +1,7 @@
 import { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import type { ScreenshotWithCamera } from "./types";
 
 export let scene: THREE.Scene;
 export let camera: THREE.PerspectiveCamera;
@@ -445,6 +446,68 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
 export function getScreenshot(): string {
   renderer.render(scene, camera);
   return renderer.domElement.toDataURL("image/png");
+}
+
+export function getScreenshotWithCamera(): ScreenshotWithCamera {
+  renderer.render(scene, camera);
+  camera.updateMatrixWorld(true);
+  const viewProjection = new THREE.Matrix4().multiplyMatrices(
+    camera.projectionMatrix,
+    camera.matrixWorldInverse
+  );
+  return {
+    dataUrl: renderer.domElement.toDataURL("image/png"),
+    width: renderer.domElement.width,
+    height: renderer.domElement.height,
+    viewProjection,
+    cameraPosition: camera.position.clone(),
+  };
+}
+
+let selectionHighlight: THREE.Points | null = null;
+
+export function showSelectionHighlight(positions: Float32Array): void {
+  clearSelectionHighlight();
+  if (positions.length < 3) {
+    return;
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+
+  const bounds = splatMesh.getBoundingBox();
+  const size = new THREE.Vector3();
+  bounds.getSize(size);
+  const diag = size.length();
+  const pointSize = THREE.MathUtils.clamp(diag * 0.0035, 0.008, 0.05);
+
+  const material = new THREE.PointsMaterial({
+    color: 0x33e0ff,
+    size: pointSize,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  selectionHighlight = new THREE.Points(geometry, material);
+  scene.add(selectionHighlight);
+}
+
+export function clearSelectionHighlight(): void {
+  if (!selectionHighlight) {
+    return;
+  }
+  scene.remove(selectionHighlight);
+  selectionHighlight.geometry.dispose();
+  const material = selectionHighlight.material;
+  if (Array.isArray(material)) {
+    for (const m of material) m.dispose();
+  } else {
+    material.dispose();
+  }
+  selectionHighlight = null;
 }
 
 export function getScreenshotCropAroundPoint(

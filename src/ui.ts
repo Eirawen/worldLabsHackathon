@@ -10,10 +10,26 @@ import { buildLocalSelection, formatSelectionHint } from "./click-selection";
 import { transformOperations, setInfillHandler, type executeOperations as executeOperationsFn, type undoLastEdit as undoLastEditFn, type undoN as undoNFn } from "./executor";
 import { generateInfill } from "./infill";
 import type { processRefinement as processRefinementFn } from "./agent";
+import {
+  fitSelectionShapes,
+  formatObjectSelectionHint,
+  growSelection,
+  selectionHighlightPositions,
+  snapOperationsToSelection,
+} from "./object-selection";
 import { refineEdit } from "./refine";
+import { getSamStatus, onSamStatus, preloadSam, segmentSelectionWithSam } from "./sam-segmentation";
 import { getManifestJSON } from "./scene-manifest";
-import { buildLocalGrid, getCellAtWorldPos, getNeighborCells, serializeLocalGridForLLM } from "./spatial-index";
-import type { AssetEntry, EditOperation, SceneManifest, SpatialGrid } from "./types";
+import { buildLocalGrid, getCellAtWorldPos, getNeighborCells, serializeLocalGridForLLM, type CachedSplatData } from "./spatial-index";
+import type {
+  AssetEntry,
+  EditOperation,
+  ObjectSelection,
+  SceneManifest,
+  ScreenshotWithCamera,
+  SDFShapeConfig,
+  SpatialGrid,
+} from "./types";
 
 type ProcessCommand = typeof processCommandFn;
 type ExecuteOperations = typeof executeOperationsFn;
@@ -33,6 +49,10 @@ export interface UIDependencies {
   getGrid: () => SpatialGrid | null;
   getManifest: () => SceneManifest | null;
   getLastClickPoint: () => THREE.Vector3 | null;
+  getCachedSplatData?: () => CachedSplatData | null;
+  getScreenshotWithCamera?: () => ScreenshotWithCamera;
+  showSelectionHighlight?: (positions: Float32Array) => void;
+  clearSelectionHighlight?: () => void;
   onSplatClick?: (callback: (point: THREE.Vector3) => void) => () => void;
   listAssets?: () => readonly AssetEntry[];
   getAssetById?: (id: string) => AssetEntry | undefined;
@@ -132,6 +152,9 @@ export function initUI(deps: UIDependencies): void {
   let lastAppliedOps: EditOperation[] | null = null;
   let lastAppliedParent: THREE.Object3D | null = null;
   let correctionRow: HTMLDivElement | null = null;
+  let activeSelection: ObjectSelection | null = null;
+  let activeSelectionShapes: SDFShapeConfig[] | null = null;
+  let selectionSeq = 0;
   let provider: "gemini" | "openai" = DEFAULT_PROVIDER;
   setProviderPreference(provider);
   providerButton.textContent = provider === "gemini" ? "Gemini" : "OpenAI";
@@ -143,6 +166,17 @@ export function initUI(deps: UIDependencies): void {
     "system",
     "Click an object, then type a command. Try: 'remove this' or 'add warm lighting'"
   );
+
+  // Warm up the in-browser SAM model so click segmentation is ready by the
+  // time the user starts editing. Falls back to region growing until then.
+  onSamStatus((samStatus, detail) => {
+    if (samStatus === "ready") {
+      showToast("Click segmentation ready (SAM)", 2200);
+    } else if (samStatus === "error") {
+      console.warn(`[ui] SAM unavailable: ${detail ?? "unknown"}; using region growing only`);
+    }
+  });
+  void preloadSam();
 
   const renderLibrary = () => {
     libraryList.replaceChildren();
@@ -259,9 +293,60 @@ export function initUI(deps: UIDependencies): void {
 
   renderLibrary();
 
+  const clearActiveSelection = () => {
+    activeSelection = null;
+    activeSelectionShapes = null;
+    deps.clearSelectionHighlight?.();
+  };
+
+  const applyObjectSelection = (selection: ObjectSelection, data: CachedSplatData) => {
+    activeSelection = selection;
+    activeSelectionShapes = fitSelectionShapes(selection, data);
+    deps.showSelectionHighlight?.(selectionHighlightPositions(selection, data));
+    setStatus(
+      status,
+      `Selected ${selection.splatCount.toLocaleString()} splats (${selection.source}, ${(selection.confidence * 100).toFixed(0)}%)`
+    );
+    console.log(
+      `[ui] Object selection active: source=${selection.source} splats=${selection.splatCount} shapes=${activeSelectionShapes.length} confidence=${selection.confidence.toFixed(3)}`
+    );
+  };
+
+  const runObjectSelection = (point: THREE.Vector3) => {
+    const data = deps.getCachedSplatData?.();
+    if (!data) {
+      return;
+    }
+    const seq = ++selectionSeq;
+    clearActiveSelection();
+
+    // Fast deterministic pass shows up immediately...
+    const grown = growSelection(point, data);
+    if (grown) {
+      applyObjectSelection(grown, data);
+    } else {
+      setStatus(status, "No object found at click");
+    }
+
+    // ...then SAM upgrades it asynchronously when the model is ready.
+    if (getSamStatus() === "ready" && deps.getScreenshotWithCamera) {
+      const screenshot = deps.getScreenshotWithCamera();
+      void segmentSelectionWithSam({ click: point.clone(), data, screenshot })
+        .then((samSelection) => {
+          if (samSelection && seq === selectionSeq) {
+            applyObjectSelection(samSelection, data);
+          }
+        })
+        .catch((error) => {
+          console.warn("[ui] SAM segmentation failed; keeping region-grow selection", error);
+        });
+    }
+  };
+
   if (deps.onSplatClick) {
     deps.onSplatClick((point) => {
       if (!selectedAssetId) {
+        runObjectSelection(point);
         return;
       }
       if (!deps.getAssetById || !deps.createPlacedAssetMesh || !deps.getPlacementParent) {
@@ -341,7 +426,11 @@ export function initUI(deps: UIDependencies): void {
         `[ui] Context: click=${formatVec3OrNull(clickPoint)} grid=${grid ? "ready" : "null"} manifest=${manifest ? "ready" : "null"} screenshotBytes=${screenshot.length} cropBytes=${screenshotCrop.length} apiKeyPresent=${apiKey.length > 0}`
       );
 
-      const voxelContext = buildVoxelContext(grid, clickPoint);
+      const preciseHint =
+        activeSelection && activeSelectionShapes && activeSelectionShapes.length > 0
+          ? formatObjectSelectionHint(activeSelection, activeSelectionShapes)
+          : null;
+      const voxelContext = buildVoxelContext(grid, clickPoint, preciseHint);
       const manifestSummary = manifest ? getManifestJSON(manifest) : null;
       setSecondaryScreenshotForNextCommand(screenshotCrop || null);
 
@@ -357,7 +446,7 @@ export function initUI(deps: UIDependencies): void {
         `[ui] Prompt payload: voxelContextChars=${voxelContext?.length ?? 0} manifestChars=${manifestSummary?.length ?? 0}`
       );
 
-      const operations = await deps.processCommand(
+      const rawOperations = await deps.processCommand(
         command,
         clickPoint,
         voxelContext,
@@ -365,11 +454,31 @@ export function initUI(deps: UIDependencies): void {
         screenshot,
         apiKey
       );
-      console.log(`[ui] Agent returned ${operations.length} operation(s)`);
-      console.log(`[ui] Operation summary: ${summarizeOperations(operations)}`);
+      console.log(`[ui] Agent returned ${rawOperations.length} operation(s)`);
+      console.log(`[ui] Operation summary: ${summarizeOperations(rawOperations)}`);
+
+      // Snap operations that target the clicked object onto the precise
+      // splat-level selection shapes — the LLM decides *what* to do, the
+      // segmentation decides *where*.
+      let operations = rawOperations;
+      if (activeSelection && activeSelectionShapes && activeSelectionShapes.length > 0) {
+        const snapped = snapOperationsToSelection(
+          rawOperations,
+          activeSelection,
+          activeSelectionShapes
+        );
+        if (snapped.snappedCount > 0) {
+          operations = snapped.ops;
+          showToast(
+            `Snapped ${snapped.snappedCount} edit${snapped.snappedCount === 1 ? "" : "s"} to ${activeSelection.source} selection`,
+            2000
+          );
+        }
+      }
 
       const appliedEdits = deps.executeOperations(operations, splatMesh);
       console.log("[ui] Executor applied operations");
+      clearActiveSelection();
 
       // Refine targeted edits (delete, recolor) but not atmosphere/light
       const isTargetedEdit = operations.some(
@@ -593,7 +702,8 @@ function setLibraryStatus(statusEl: HTMLDivElement, text: string): void {
 
 function buildVoxelContext(
   grid: SpatialGrid | null,
-  clickPoint: THREE.Vector3 | null
+  clickPoint: THREE.Vector3 | null,
+  preciseHint: string | null = null
 ): string | null {
   if (!grid || !clickPoint) {
     console.log(
@@ -608,6 +718,12 @@ function buildVoxelContext(
     `[ui] buildVoxelContext: cell=${cell ? cell.gridPos.join(",") : "none"} neighbors=${neighbors.length}`
   );
   const baseContext = buildClickContext(clickPoint, cell, neighbors);
+
+  // A precise splat-level selection supersedes the legacy coarse-cell hint.
+  if (preciseHint) {
+    console.log("[ui] Using precise object selection hint in context");
+    return `${baseContext}\n\n${preciseHint}`;
+  }
 
   if (!ENABLE_CLICK_SELECTION_HINTS) {
     console.log("[ui] Deterministic selection hints disabled via feature flag");

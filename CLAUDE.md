@@ -23,8 +23,11 @@ Environment: create `.env` with `VITE_ANTHROPIC_API_KEY=<key>`. Place `.spz` sce
 
 ```
 main.ts
-  ├── viewer.ts          # Three.js scene, SparkRenderer, SplatMesh loading, raycasting
-  ├── spatial-index.ts   # 20×20×20 voxel grid built from splatMesh.forEachSplat()
+  ├── viewer.ts          # Three.js scene, SparkRenderer, SplatMesh loading, raycasting, selection highlight
+  ├── spatial-index.ts   # 20×20×20 voxel grid built from splatMesh.forEachSplat() + cached splat data
+  ├── object-selection.ts # Splat-level region growing, ellipsoid fitting, operation snapping (AD-010)
+  ├── sam-segmentation.ts # In-browser SlimSAM click segmentation via transformers.js (lazy chunk)
+  ├── mask-lift.ts       # 2D segmentation mask → 3D splat selection (projection + depth gating)
   ├── scene-manifest.ts  # Scene understanding; wraps voxel grid (+ optional Claude Vision)
   ├── agent.ts           # Claude API call: user command + context → EditOperation[]
   ├── executor.ts        # EditOperation[] → Spark SplatEdit/SplatEditSdf objects

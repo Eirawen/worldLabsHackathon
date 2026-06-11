@@ -18,6 +18,7 @@ import {
 import { generateManifest, getManifestJSON } from "./scene-manifest";
 import {
   buildSpatialGrid,
+  getCachedSplatData,
   getCellAtWorldPos,
   gridKey,
   serializeSpatialGridForLLM,
@@ -25,10 +26,13 @@ import {
 import type { SceneManifest, SpatialGrid } from "./types";
 import { initUI } from "./ui";
 import {
+  clearSelectionHighlight,
   getScreenshot,
   getScreenshotCropAroundPoint,
+  getScreenshotWithCamera,
   initViewer,
   onSplatClick,
+  showSelectionHighlight,
 } from "./viewer";
 
 const DEFAULT_SCENE_FILE = "elegant_library_with_fireplace_500k.spz";
@@ -130,6 +134,10 @@ async function bootstrap() {
     getGrid,
     getManifest,
     getLastClickPoint,
+    getCachedSplatData,
+    getScreenshotWithCamera,
+    showSelectionHighlight,
+    clearSelectionHighlight,
     onSplatClick,
     listAssets,
     getAssetById,

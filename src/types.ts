@@ -79,6 +79,34 @@ export interface InfillConfig {
   maxClusters?: number;
 }
 
+export interface ObjectSelection {
+  indices: number[];
+  centroid: THREE.Vector3;
+  bounds: THREE.Box3;
+  avgColor: THREE.Color;
+  splatCount: number;
+  confidence: number;
+  source: "region-grow" | "sam";
+}
+
+export interface CameraSnapshot {
+  viewProjection: THREE.Matrix4;
+  cameraPosition: THREE.Vector3;
+  width: number;
+  height: number;
+}
+
+export interface ScreenshotWithCamera extends CameraSnapshot {
+  dataUrl: string;
+}
+
+export interface SegmentationMask {
+  data: Uint8Array;
+  width: number;
+  height: number;
+  score: number;
+}
+
 export interface AssetEntry {
   id: string;
   label: string;

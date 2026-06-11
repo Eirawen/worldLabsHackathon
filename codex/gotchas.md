@@ -66,4 +66,12 @@
 
 29. **Regular grid sampling for fill splats produces visible dot patterns.** Even with jitter, a structured grid is perceptible. Use ≥60% jitter (relative to spacing) plus slight off-plane displacement (15% of spacing) to break the pattern.
 
+31. **Fine-grid BFS dies on sparse splat data.** A cell-adjacency BFS can only bridge gaps when neighboring cells are occupied. At ~scene/192 cell size, low-density regions (or synthetic test scenes) leave most cells with 0–1 splats and the flood fill stalls immediately. `getFineGrid` adaptively doubles the cell size (up to 3×) until occupied cells average ≥3 splats.
+
+32. **SAM masks include occluded background.** A 2D mask has no depth: splats on the wall *behind* the clicked object also project inside the mask. `liftMaskToSplats` gates by camera distance around the raycast hit (slack estimated from the world extent of splats at hit depth), then `filterToConnectedComponent` drops any residual disconnected patches.
+
+33. **SAM point prompts are in reshaped-input pixel space.** transformers.js' `SamProcessor` resizes the image (longest side 1024); `input_points` must be scaled by `inputs.reshaped_input_sizes[0]` ([h, w]), not the original image size. `input_labels` must be an int64 tensor (BigInt values).
+
+34. **transformers.js must be dynamically imported.** Static import pulls ~900kB JS + 21MB WASM into the main bundle. `await import("@huggingface/transformers")` keeps it in a lazy chunk that only loads when SAM is enabled.
+
 30. **Spatial grid and click points must be in the same frame.** `forEachSplat()` and `getBoundingBox()` are in `SplatMesh` local space, while raycast `hit.point` is world space. If the mesh has a non-identity transform (for example `quaternion.set(1,0,0,0)`), local-grid lookup with world click points will target mirrored/wrong cells. Build the grid in world space (transform bounds + centers with `matrixWorld`) or explicitly convert clicks to local before lookup.

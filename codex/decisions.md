@@ -46,6 +46,11 @@
 - Small/weak clusters (< 15% of largest, inlier ratio < 0.5) must be filtered to avoid spurious tilted fill disks
 - Fill splat scale must be computed from grid spacing (1.5x for overlap), not inherited from boundary splat scale which is too small for covering flat surfaces
 
+## AD-010: Splat-level object selection with SAM upgrade and operation snapping
+**Date:** 2026-06-11
+**Decision:** Object selection no longer relies on the coarse 20×20×20 voxel cells. A new pipeline selects individual splats: (1) `object-selection.ts` grows a selection splat-by-splat over a fine sparse grid (~scene/192 cells, adaptively coarsened when occupancy is low) with dual color gating (local frontier reference + global seed anchor); (2) when the in-browser SlimSAM model (`sam-segmentation.ts`, transformers.js, WebGPU→WASM fallback) is loaded, a click runs Segment Anything on the rendered frame and `mask-lift.ts` projects every cached splat through the capture-time view-projection matrix into the mask with adaptive depth gating + connected-component filtering; (3) fitted rotated ellipsoids (PCA, k-means along the principal axis for elongated objects) are produced from the selected splats; (4) `snapOperationsToSelection` replaces the LLM's guessed SDF geometry with the fitted shapes whenever the returned operation targets the clicked object.
+**Rationale:** The hackathon-era selection worked at half-meter voxel granularity and asked the LLM to output metric 3D geometry — both fundamentally capped precision, which showed up as endless threshold tuning ("removing too little/too much"). Splat-level segmentation fixes the representation; snapping removes the LLM from the geometry loop entirely (it decides *what*, segmentation decides *where*). Region growing is synchronous and instant (fallback + immediate feedback); SAM upgrades the selection asynchronously when ready. Rotated ellipsoids flow through the existing executor, asset extraction, and infill unchanged because all three already honor SDF `rotation`.
+
 ## AD-009: Spatial grid canonical frame is world space
 **Date:** 2026-02-28
 **Decision:** `SpatialGrid.worldBounds`, `VoxelCell.worldCenter`, and `VoxelCell.worldBounds` are built in world space by transforming local splat centers/bounds with `splatMesh.matrixWorld`.

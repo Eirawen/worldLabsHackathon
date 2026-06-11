@@ -167,6 +167,8 @@ npm run dev
 Set `VITE_GEMINI_API_KEY` in `.env` for primary Gemini access.
 Optional failover: set `VITE_OPENAI_API_KEY` (and optionally `VITE_OPENAI_MODEL`, default `gpt-5.2`) to enable automatic fallback when Gemini is temporarily unavailable (for example HTTP 503 high demand).
 
+**Click segmentation (SAM):** clicking an object instantly selects it via splat-level region growing, then upgrades to a pixel-accurate Segment Anything (SlimSAM) selection once the in-browser model finishes loading (weights are fetched from the Hugging Face hub on first run and cached by the browser; WebGPU when available, WASM otherwise). Set `VITE_ENABLE_SAM=false` to disable, or `VITE_SAM_MODEL` to use a different SAM checkpoint. Edits that target the clicked object are snapped to tight fitted ellipsoids around the selected splats, so deletes/recolors no longer depend on the LLM guessing 3D geometry.
+
 Place `.spz` files exported from Marble in `public/scenes/`.
 
 ---
